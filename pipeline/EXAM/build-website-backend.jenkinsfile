@@ -1,0 +1,94 @@
+pipeline {
+    parameters { 
+        string(name: 'BRANCH', defaultValue: 'master', description: '') 
+    }
+    environment {
+        REPO_COMMON = 'TQAExamCenter-Common'
+        REPO_NAME = 'TQAExamCenter'
+        BUILD_TM = sh(script: "TZ='Asia/Shanghai' date +%Y%m%d_%H%M%S", returnStdout: true).trim()
+        DIST_ROOT = '/root/dist/exam-target'
+    }
+    
+    agent {
+        docker {
+            image 'gradle:6.7.1-jdk11'
+            args '-v /root/.gradle:/home/gradle/.gradle ' + 
+                '-v /root/dist:/root/dist'
+        }
+    }
+
+    stages {
+        stage('checkout repo') {
+            steps {
+                dir(env.REPO_COMMON) {
+                    checkoutRepo(assembleRepoUrl(env.TC_REPO_URL_TPL, 
+                        env.REPO_COMMON, env.TC_REPO_ACCESS_TOKEN), "*/${BRANCH}")
+                }
+                dir(env.REPO_NAME) {
+                    checkoutRepo(assembleRepoUrl(env.TC_REPO_URL_TPL, 
+                        env.REPO_NAME, env.TC_REPO_ACCESS_TOKEN), "*/${BRANCH}")
+                }
+                sh 'pwd; ls -al'
+            }
+        }
+        
+        stage('gradle build & archive targets') {
+            steps {
+                dir(env.REPO_COMMON) {
+                    execGradleBuild()
+                    sh 'pwd; ls -al'
+                }
+                dir(env.REPO_NAME) {
+                    execGradleBuild()
+                    archiveTargets(env.DIST_ROOT, env.BUILD_TM)
+                    sh 'pwd; ls -al'
+                }
+            }
+        }
+        // docker image build & container upgrade actions
+    }
+    
+    post { 
+        always { 
+            cleanWs()
+        }
+    }
+}
+
+def assembleRepoUrl(String urlTpl, String repoName, String token) {
+    String url = urlTpl.replace('#_TOKEN_', token).replace('#_REPO_', repoName)
+    return url
+}
+
+def checkoutRepo(String repoUrl, String branch) {
+    checkout([
+        $class: 'GitSCM', branches: [[name: branch]], 
+        doGenerateSubmoduleConfigurations: false, 
+        extensions: [[$class: 'CloneOption', depth: 1, noTags: false, reference: '', shallow: true]], 
+        submoduleCfg: [], 
+        userRemoteConfigs: [[url: repoUrl]]
+    ])
+}
+
+def execGradleBuild() {
+    sh 'gradle -v -d; gradle build'
+}
+
+def archiveTargets(String archiveRoot, String buildNumber, String targetPattern = '.*/build/libs/.*\\.jar') {
+    String archiveDest = archiveRoot + '/' + buildNumber
+    sh 'mkdir -p ' + archiveDest
+    sh 'find ./ -regex "' + targetPattern + '" -exec cp -v {} ' + archiveDest + '/ \\;'
+}
+
+def buildImage(String workDir, String imageName, String imageTag) {
+    dir(workDir) {
+        script {
+            docker.build(imageName + ':' + imageTag)
+        }
+    }
+}
+
+def upgradeContainer(String containerName, String imageName, String imageTag) {
+    sh 'echo docker rm -f ' + containerName
+    sh 'echo docker run -d --name ' + containerName + ' ... ' + imageName
+}

@@ -1,0 +1,104 @@
+pipeline {
+    parameters { 
+        string(name: 'BRANCH', defaultValue: 'master', description: '') 
+    }
+    
+    environment {
+        REPO_NAME = 'TQA'
+        BUILD_TM = sh(script: "TZ='Asia/Shanghai' date +%Y%m%d_%H%M%S", returnStdout: true).trim()
+        DIST_ROOT = '/root/dist/tqa-target'
+    }
+    
+    agent {
+        docker {
+            image 'maven:3.6.3-jdk-11-slim'
+            args '-v /root/.m2:/root/.m2 ' + 
+                '-v /root/.m2/settings.xml:/usr/share/maven/ref/settings.xml ' + 
+                '-v /root/dist:/root/dist'
+        }
+    }
+
+    stages {
+        stage('checkout repo') {
+            steps {
+                checkoutRepo(assembleRepoUrl(env.TC_REPO_URL_TPL, 
+                    env.REPO_NAME, env.TC_REPO_ACCESS_TOKEN), "*/${BRANCH}")
+            }
+        }
+        
+        stage('maven build & archive targets') {
+            steps {
+                sh 'pwd; ls -al'
+                execMavenBuild()
+                archiveTargets(env.DIST_ROOT, env.BUILD_TM)
+            }
+        }
+        
+        stage('build image & upgrade container') {
+            parallel {
+                stage ('image: tqa-client-front') {
+                    steps {
+                        buildImage('tqa-client-front', 'tqa-client-front', env.BUILD_TM)
+                        upgradeContainer('tqa-client-front', 'tqa-client-front', env.BUILD_TM)
+                    }
+                }
+                stage ('image: tqa-client-app') {
+                    steps {
+                        buildImage('tqa-client-app', 'tqa-client-app', env.BUILD_TM)
+                        upgradeContainer('tqa-client-app', 'tqa-client-app', env.BUILD_TM)
+                    }
+                }
+                stage ('image: tqa-client-admin') {
+                    steps {
+                        buildImage('tqa-client-admin', 'tqa-client-admin', env.BUILD_TM)
+                        upgradeContainer('tqa-client-admin', 'tqa-client-admin', env.BUILD_TM)
+                    }
+                }
+            }
+        }
+    }
+    
+    post { 
+        always { 
+            cleanWs()
+        }
+    }
+}
+
+def assembleRepoUrl(String urlTpl, String repoName, String token) {
+    String url = urlTpl.replace('#_TOKEN_', token).replace('#_REPO_', repoName)
+    return url
+}
+
+def checkoutRepo(String repoUrl, String branch) {
+    checkout([
+        $class: 'GitSCM', branches: [[name: branch]], 
+        doGenerateSubmoduleConfigurations: false, 
+        extensions: [[$class: 'CloneOption', depth: 1, noTags: false, reference: '', shallow: true]], 
+        submoduleCfg: [], 
+        userRemoteConfigs: [[url: repoUrl]]
+    ])
+}
+
+def execMavenBuild() {
+    sh 'mvn -v; mvn -B -DskipTests clean install'
+}
+
+def archiveTargets(String archiveRoot, String buildNumber, String targetPattern = '.*/target/.*\\.jar') {
+    String archiveDest = archiveRoot + '/' + buildNumber
+    sh 'mkdir -p ' + archiveDest
+    sh 'find ./ -regex "' + targetPattern + '" -exec cp -v {} ' + archiveDest + '/ \\;'
+}
+
+def buildImage(String workDir, String imageName, String imageTag) {
+    dir(workDir) {
+        script {
+            docker.build(imageName + ':' + imageTag)
+        }
+    }
+}
+
+def upgradeContainer(String containerName, String imageName, String imageTag) {
+    sh 'echo docker rm -f ' + containerName
+    sh 'echo docker run -d --name ' + containerName + ' ... ' + imageName
+}

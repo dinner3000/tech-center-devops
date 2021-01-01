@@ -1,0 +1,11 @@
+#!/bin/sh 
+
+docker run -d --privileged --name jenkins \
+-v /home/dev/jenkins_home:/var/jenkins_home \
+-v /var/run/docker.sock:/var/run/docker.sock \
+-v /usr/bin/docker:/usr/bin/docker \
+-v /etc/localtime:/etc/localtime:ro \
+-e TZ="Asia/Shanghai" \
+-p 8080:8080 -p 50000:50000 \
+-u root \
+jenkinsci/blueocean

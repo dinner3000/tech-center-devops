@@ -1,0 +1,61 @@
+pipeline {
+    parameters { 
+        string(name: 'BRANCH', defaultValue: 'master', description: '') 
+    }
+    environment {
+        REPO_NAME = 'TQAExamCenter-Frontend'
+        BUILD_TM = sh(script: "TZ='Asia/Shanghai' date +%Y%m%d_%H%M%S", returnStdout: true).trim()
+        DIST_ROOT = '/root/dist/exam-target'
+        SRC = 'frontend'
+    }
+    
+    agent {
+        docker {
+            image 'node:10.23.0-buster-slim'
+            args '-v /root/.npm:/root/.npm ' + 
+                '-v /root/.npmrc:/root/.npmrc ' + 
+                '-v /root/dist:/root/dist'
+        }
+    }
+
+    stages {
+        stage('checkout repo') {
+            steps {
+                checkout([
+                    $class: 'GitSCM', branches: [[name: "*/${params.BRANCH}"]], 
+                    doGenerateSubmoduleConfigurations: false, 
+                    extensions: [[$class: 'CloneOption', depth: 1, noTags: false, reference: '', shallow: true]], 
+                    submoduleCfg: [], 
+                    userRemoteConfigs: [[url: env.REPO_URL]]
+                ])
+            }
+        }
+        
+        stage('npm install') {
+            steps {
+                sh 'npm -v; pwd; ls -al'
+                sh 'npm install'
+            }
+        }
+        stage('npm build') {
+            steps {
+                sh 'npm run dist'
+                // sh 'pwd; ls -al'
+            }
+        }
+        
+        stage('move targets') {
+            steps {
+                sh 'mkdir -p ${DIST_ROOT}/${BUILD_TM}'
+                sh 'mv -fv ./lib/* ${DIST_ROOT}/${BUILD_TM}/'
+            }
+        }
+
+    }
+    
+    post { 
+        always { 
+            cleanWs()
+        }
+    }
+}
